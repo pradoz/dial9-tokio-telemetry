@@ -66,28 +66,82 @@ impl SegmentProcessor for SymbolizeProcessor {
             // thread and waits for the response).
             let result = tokio::task::spawn_blocking(move || {
                 let maps = crate::read_proc_maps();
-                let output = symbolizer.symbolize_bytes(input.clone(), &maps)?;
-                // Hand back the original bytes plus the symbol output as two
-                // chunks — no copy of `input`.
-                let mut combined = Payload::new();
-                combined.push(input);
-                combined.push(bytes::Bytes::from(output));
-                Ok::<_, std::io::Error>(combined)
+                let output = symbolizer.symbolize_bytes(input.clone(), &maps);
+                (input, output)
             })
             .await;
             match result {
-                Ok(Ok(payload)) => {
-                    data.set_payload(payload);
+                Ok((input, Ok(output))) => {
+                    // Hand back the original bytes plus the symbol output as two
+                    // chunks — no copy of `input`.
+                    let mut combined = Payload::new();
+                    combined.push(input);
+                    combined.push(bytes::Bytes::from(output));
+                    data.set_payload(combined);
                     Ok(data)
                 }
-                Ok(Err(e)) => {
+                Ok((input, Err(e))) => {
                     rate_limited!(Duration::from_secs(60), {
-                        tracing::warn!(target: "dial9_worker", error = %e, "symbolization failed, preserving original bytes");
+                        tracing::warn!(target: "dial9_worker", error = %e, "symbolization failed, continuing with original bytes");
                     });
-                    Err(ProcessError::io(data, e))
+                    data.set_payload(input);
+                    Ok(data)
                 }
                 Err(e) => Err(ProcessError::io(data, std::io::Error::other(e))),
             }
         })
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        target_os = "linux",
+        all(target_os = "android", target_arch = "aarch64")
+    )
+))]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct Capture(Arc<Mutex<Vec<Vec<u8>>>>);
+
+    impl SegmentProcessor for Capture {
+        fn name(&self) -> &'static str {
+            "Capture"
+        }
+
+        fn process(
+            &mut self,
+            data: SegmentData,
+        ) -> Pin<Box<dyn Future<Output = Result<SegmentData, ProcessError>> + Send + '_>> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(data.payload().clone().into_vec());
+            Box::pin(std::future::ready(Ok(data)))
+        }
+    }
+
+    #[test]
+    fn symbolization_failure_preserves_original_payload() {
+        let original = b"not a dial9 trace".to_vec();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let processors: Vec<Box<dyn SegmentProcessor>> = vec![
+            Box::new(SymbolizeProcessor::new()),
+            Box::new(Capture(Arc::clone(&captured))),
+        ];
+
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(dial9_core::test_util::run_pipeline_continuous(
+                vec![original.clone()],
+                processors,
+                Duration::from_millis(1),
+            ))
+            .unwrap();
+
+        assert_eq!(*captured.lock().unwrap(), vec![original]);
     }
 }
