@@ -180,6 +180,7 @@ class TraceDecoder {
     // Viewer-internal fast path: emit safe timestamps as Numbers and retain the
     // default decimal-string contract outside that opt-in.
     this._numericTimestamps = options?.numericTimestamps === true;
+    this._reuseEventObjects = options?.reuseEventObjects === true;
     // Streaming mode. When false (default, whole-buffer decode), a frame that
     // runs off the end of the buffer is a truncated tail: `nextFrame()` stops
     // gracefully at EOF. When true, the same condition means "the buffer holds
@@ -340,6 +341,14 @@ class TraceDecoder {
       fields.push({ name: fn_, fieldType: ft });
     }
     const schema = { typeId, name, hasTimestamp, fields };
+    if (this._reuseEventObjects) {
+      const values = {};
+      const frame = { type: 'event', typeId, name, values };
+      Object.defineProperties(schema, {
+        _values: { value: values },
+        _frame: { value: frame },
+      });
+    }
     this.schemas.set(typeId, schema);
     return { type: 'schema', ...schema };
   }
@@ -363,7 +372,7 @@ class TraceDecoder {
       this._timestampBaseNs = absoluteNs;
     }
 
-    const values = {};
+    const values = schema._values ?? {};
     for (const field of schema.fields) {
       const val = decodeFieldValue(this._view, this._pos, field.fieldType);
       const consumed = fieldBytes;
@@ -377,8 +386,15 @@ class TraceDecoder {
       }
       this._pos += consumed;
     }
-    const result = { type: 'event', typeId, name: schema.name, values };
-    if (timestampNs !== null) result.timestamp_ns = timestampNs;
+    let result;
+    if (schema._frame) {
+      result = schema._frame;
+      if (timestampNs === null) delete result.timestamp_ns;
+      else result.timestamp_ns = timestampNs;
+    } else {
+      result = { type: 'event', typeId, name: schema.name, values };
+      if (timestampNs !== null) result.timestamp_ns = timestampNs;
+    }
     return result;
   }
 

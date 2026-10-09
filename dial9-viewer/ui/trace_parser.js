@@ -1920,6 +1920,19 @@
         };
     }
 
+    function decoderOptions(options) {
+        return {
+            numericTimestamps: true,
+            reuseEventObjects: !!(
+                options?.eventSink &&
+                options?.cpuSampleSink &&
+                options?.spanEventSink &&
+                options?.taskDumpSink &&
+                options?.customEventSink
+            ),
+        };
+    }
+
     /** @private Parse a binary trace buffer. */
     async function parseTraceBuffer(buffer, options) {
         buffer = await maybeGunzip(buffer);
@@ -1933,7 +1946,7 @@
         const TD = getTraceDecoder();
         const dec = new TD(
             buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer,
-            { numericTimestamps: true },
+            decoderOptions(options),
         );
         if (!dec.decodeHeader()) throw new Error("Invalid trace header");
         const totalBytes = dec.byteLength;
@@ -2070,7 +2083,7 @@
             if (!headerDecoded) {
                 // Need at least the 5-byte header before any frames. Wait for more.
                 if (acc.length < 5) return;
-                dec = new TD(acc, { numericTimestamps: true });
+                dec = new TD(acc, decoderOptions(options));
                 dec.enableStreaming();
                 if (!dec.decodeHeader())
                     throw new Error("Invalid trace header");

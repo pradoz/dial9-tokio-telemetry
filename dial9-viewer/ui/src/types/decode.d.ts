@@ -140,7 +140,10 @@ declare module "*/decode.js" {
   export class TraceDecoder {
     constructor(
       buffer: ArrayBuffer | Uint8Array,
-      options?: { numericTimestamps?: boolean }
+      options?: {
+        numericTimestamps?: boolean;
+        reuseEventObjects?: boolean;
+      }
     );
 
     /** Accumulated event schemas, keyed by wire type id. */

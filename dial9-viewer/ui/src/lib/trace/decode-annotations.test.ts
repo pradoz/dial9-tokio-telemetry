@@ -115,6 +115,36 @@ describe("TraceDecoder schema annotations", () => {
     );
   });
 
+  it("reuses event and values objects only when explicitly requested", () => {
+    const bytes = Uint8Array.from([
+      0x54, 0x52, 0x43, 0x00, 1,
+      ...schemaFrame(),
+      0x02, ...u16(TYPE_ID), 1, 0, 0, 7,
+      0x02, ...u16(TYPE_ID), 1, 0, 0, 9,
+    ]);
+    const decodeTwo = (reuseEventObjects = false) => {
+      const decoder = new TraceDecoder(bytes, { numericTimestamps: true, reuseEventObjects });
+      expect(decoder.decodeHeader()).toBe(true);
+      return decoder.decodeAll().filter((frame) => frame.type === "event");
+    };
+    const stable = decodeTwo();
+    expect(stable[0]).not.toBe(stable[1]);
+    expect(stable.map((frame) => frame.values.value)).toEqual(["7", "9"]);
+
+    const decoder = new TraceDecoder(bytes, {
+      numericTimestamps: true,
+      reuseEventObjects: true,
+    });
+    expect(decoder.decodeHeader()).toBe(true);
+    const first = decoder.nextFrame(); // schema
+    expect(first?.type).toBe("schema");
+    const a = decoder.nextFrame();
+    const b = decoder.nextFrame();
+    expect(a).toBe(b);
+    expect(a?.type === "event" ? a.values.value : null).toBe("9");
+    expect(a?.type === "event" ? a.timestamp_ns : null).toBe(2);
+  });
+
   it("keeps timestamp strings by default and emits safe numbers only when requested", () => {
     const event = [
       0x54, 0x52, 0x43, 0x00, 1,
