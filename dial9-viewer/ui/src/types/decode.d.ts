@@ -143,6 +143,7 @@ declare module "*/decode.js" {
       options?: {
         numericTimestamps?: boolean;
         reuseEventObjects?: boolean;
+        omitPoolFrameEntries?: boolean;
       }
     );
 

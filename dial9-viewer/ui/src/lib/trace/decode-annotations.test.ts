@@ -115,6 +115,25 @@ describe("TraceDecoder schema annotations", () => {
     );
   });
 
+  it("can omit duplicate pool-frame entries while retaining decoder pools", () => {
+    const data = utf8("alpha");
+    const bytes = Uint8Array.from([
+      0x54, 0x52, 0x43, 0x00, 1,
+      0x03, ...u32(1), ...u32(7), ...u32(data.length), ...data,
+    ]);
+    const normal = new TraceDecoder(bytes);
+    expect(normal.decodeHeader()).toBe(true);
+    expect(normal.nextFrame()).toMatchObject({
+      type: "string_pool",
+      entries: [{ poolId: 7, data: "alpha" }],
+    });
+
+    const compact = new TraceDecoder(bytes, { omitPoolFrameEntries: true });
+    expect(compact.decodeHeader()).toBe(true);
+    expect(compact.nextFrame()).toEqual({ type: "string_pool", entries: [] });
+    expect(compact.stringPool.get(7)).toBe("alpha");
+  });
+
   it("reuses event and values objects only when explicitly requested", () => {
     const bytes = Uint8Array.from([
       0x54, 0x52, 0x43, 0x00, 1,

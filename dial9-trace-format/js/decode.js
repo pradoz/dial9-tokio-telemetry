@@ -181,6 +181,7 @@ class TraceDecoder {
     // default decimal-string contract outside that opt-in.
     this._numericTimestamps = options?.numericTimestamps === true;
     this._reuseEventObjects = options?.reuseEventObjects === true;
+    this._omitPoolFrameEntries = options?.omitPoolFrameEntries === true;
     // Streaming mode. When false (default, whole-buffer decode), a frame that
     // runs off the end of the buffer is a truncated tail: `nextFrame()` stops
     // gracefully at EOF. When true, the same condition means "the buffer holds
@@ -443,7 +444,7 @@ class TraceDecoder {
 
   _decodeStringPool() {
     const count = this._view.getUint32(this._pos, true); this._pos += 4;
-    const entries = [];
+    const entries = this._omitPoolFrameEntries ? null : [];
     for (let i = 0; i < count; i++) {
       const poolId = this._view.getUint32(this._pos, true); this._pos += 4;
       const len = this._view.getUint32(this._pos, true); this._pos += 4;
@@ -451,14 +452,14 @@ class TraceDecoder {
         new Uint8Array(this._view.buffer, this._view.byteOffset + this._pos, len));
       this._pos += len;
       this.stringPool.set(poolId, data);
-      entries.push({ poolId, data });
+      if (entries) entries.push({ poolId, data });
     }
-    return { type: 'string_pool', entries };
+    return { type: 'string_pool', entries: entries ?? [] };
   }
 
   _decodeStackPool() {
     const count = this._view.getUint32(this._pos, true); this._pos += 4;
-    const entries = [];
+    const entries = this._omitPoolFrameEntries ? null : [];
     for (let i = 0; i < count; i++) {
       const poolId = this._view.getUint32(this._pos, true); this._pos += 4;
       const frameCount = this._view.getUint32(this._pos, true); this._pos += 4;
@@ -470,9 +471,9 @@ class TraceDecoder {
         this._pos += 8;
       }
       this.stackPool.set(poolId, addrs);
-      entries.push({ poolId, addrs });
+      if (entries) entries.push({ poolId, addrs });
     }
-    return { type: 'stack_pool', entries };
+    return { type: 'stack_pool', entries: entries ?? [] };
   }
 
 }

@@ -1921,15 +1921,17 @@
     }
 
     function decoderOptions(options) {
+        const columnar = !!(
+            options?.eventSink &&
+            options?.cpuSampleSink &&
+            options?.spanEventSink &&
+            options?.taskDumpSink &&
+            options?.customEventSink
+        );
         return {
             numericTimestamps: true,
-            reuseEventObjects: !!(
-                options?.eventSink &&
-                options?.cpuSampleSink &&
-                options?.spanEventSink &&
-                options?.taskDumpSink &&
-                options?.customEventSink
-            ),
+            reuseEventObjects: columnar,
+            omitPoolFrameEntries: columnar,
         };
     }
 
