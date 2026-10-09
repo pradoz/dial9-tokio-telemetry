@@ -155,6 +155,10 @@ export class ColumnarSpanEvents {
    * required; stable tiebreak on index preserves the frozen sort's equal-ts
    * order. */
   private _tsIndex: Int32Array | null = null;
+  private readonly projections = new Map<
+    string,
+    { kind: number | null; extraKeys: string[] }
+  >();
   private _released = false;
 
   constructor(cap = INITIAL_CAP) {
@@ -342,9 +346,18 @@ export class ColumnarSpanEvents {
       this.push(SPAN_KIND.Complete, timestamp, v, singleEventSpan);
       return true;
     }
-    const kind = spanKindOf(name);
-    if (kind === null) return false;
-    this.push(kind, timestamp, v);
+    let projection = this.projections.get(name);
+    if (projection === undefined) {
+      const kind = spanKindOf(name);
+      const isBase = kind === SPAN_KIND.Exit ? isBaseExitField : isBaseEnterField;
+      projection = {
+        kind,
+        extraKeys: kind === null ? [] : Object.keys(v).filter((key) => !isBase(key)),
+      };
+      this.projections.set(name, projection);
+    }
+    if (projection.kind === null) return false;
+    this.push(projection.kind, timestamp, v, null, projection.extraKeys);
     return true;
   }
 
@@ -446,6 +459,7 @@ export class ColumnarSpanEvents {
     timestamp: number,
     v: Record<string, DecodedFieldValue>,
     singleEventSpan: SingleEventSpanProjection | null = null,
+    projectedExtraKeys: readonly string[] | null = null,
   ): void {
     if (this._len === this._cap) this.grow();
     const i = this._len++;
@@ -494,8 +508,9 @@ export class ColumnarSpanEvents {
         ? isBaseExitField
         : isBaseEnterField;
     const extras = kind === SPAN_KIND.Complete ? singleEventSpan!.fields : v;
-    for (const k in extras) {
-      if (!isBase(k)) {
+    const keys = projectedExtraKeys ?? Object.keys(extras);
+    for (const k of keys) {
+      if (kind === SPAN_KIND.Complete || !isBase(k)) {
         if (this.extraLen === this._extraCap) this.growExtra();
         this.extraKeyId[this.extraLen] = this.internKey(k);
         this.extraValId[this.extraLen] = this.internVal(extras[k]!);

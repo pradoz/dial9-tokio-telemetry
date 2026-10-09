@@ -374,9 +374,15 @@ export function redFlagSummary(
 ): RedFlag[] {
   const out: RedFlag[] = [];
   for (const type of POI_FILTERS) {
-    const count = poiMatchCount(source, type, spawnThresholdUs);
+    const result = detectorResult(
+      source,
+      type,
+      spawnThresholdUs,
+      POI_WORST_N_DEFAULT,
+    );
+    const count = result.matched;
     if (count === 0) continue;
-    const worst = poisForFilter(source, type, spawnThresholdUs, 1)[0];
+    const worst = result.list[0];
     out.push({
       type,
       counted: isPredicateFilter(type),

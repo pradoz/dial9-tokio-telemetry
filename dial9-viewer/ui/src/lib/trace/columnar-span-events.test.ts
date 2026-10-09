@@ -77,6 +77,15 @@ describe("push base-field split", () => {
     });
   });
 
+  it("reuses a schema projection without changing extra fields", () => {
+    const s = new ColumnarSpanEvents();
+    const fields = { worker_id: 1, span_id: "s1", span_name: "handle", request_id: "r1" };
+    expect(s.pushIfSpan("SpanEnter:handle", 1, fields, null)).toBe(true);
+    expect(s.pushIfSpan("SpanEnter:handle", 2, { ...fields, span_id: "s2", request_id: "r2" }, null)).toBe(true);
+    expect(extrasOf(s, 0)).toEqual({ request_id: "r1" });
+    expect(extrasOf(s, 1)).toEqual({ request_id: "r2" });
+  });
+
   it("uses the namespaced task ID without consuming an application task_id", () => {
     const s = new ColumnarSpanEvents();
     s.push(SPAN_KIND.Enter, 100, {
