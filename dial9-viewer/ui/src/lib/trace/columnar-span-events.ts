@@ -524,6 +524,11 @@ export class ColumnarSpanEvents {
   }
 
   // ── Index accessors for the columnar buildSpanData ──
+  /** Interned span-id index, or -1 when absent. */
+  spanIdIndexAt(i: number): number {
+    this.assertLive();
+    return this.spanIdIdx[i]!;
+  }
   /** span_id as the exact string buildSpanData keys by (String(v.span_id));
    * "undefined" when absent, matching String(undefined). */
   spanIdAt(i: number): string {
