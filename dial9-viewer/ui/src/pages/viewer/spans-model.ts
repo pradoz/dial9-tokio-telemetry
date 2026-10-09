@@ -281,7 +281,10 @@ export const BASE_BAR_H = 4;
 /** A drawn span cluster: final geometry (post focus reposition + height
  *  scaling), so the draw step needs only the highlight set for alpha. */
 export interface SpanDrawBucket {
+  /** Materialized members on the legacy/focused/filtered path. */
   spans: readonly TracingSpan[];
+  /** Columnar member rows on the unfiltered root path. */
+  rows?: readonly number[] | undefined;
   representative: TracingSpan;
   /** Draw-area-relative x (0..drawW), clamped (computeSpanLayout's own x). */
   x1: number;
@@ -343,6 +346,86 @@ function bucketHeight(
   return h;
 }
 
+/**
+ * Layout the unfiltered columnar root view without materializing every span.
+ * The initial viewport commonly contains millions of spans but only a few
+ * thousand pixel-grid buckets; materialize one representative per bucket and
+ * retain compact row ids for hover details.
+ */
+function layoutColumnarRoots(
+  cs: ColumnarSpans,
+  viewStart: number,
+  viewEnd: number,
+  drawW: number,
+  canvasH: number,
+): { buckets: SpanDrawBucket[]; minDur: number; maxDur: number; count: number } {
+  const { lo, hi } = cs.windowRows(viewStart, viewEnd);
+  const visible = new Uint8Array(cs.length);
+  for (let r = lo; r < hi; r++) if (cs.end[r]! >= viewStart) visible[r] = 1;
+
+  let count = 0;
+  let minLog = Infinity;
+  let maxLog = -Infinity;
+  for (let r = lo; r < hi; r++) {
+    if (visible[r] === 0) continue;
+    const parent = cs.parentRow[r]!;
+    if (parent >= 0 && visible[parent] !== 0) continue;
+    const log = Math.log(Math.max(cs.end[r]! - cs.start[r]!, 1));
+    if (log < minLog) minLog = log;
+    if (log > maxLog) maxLog = log;
+    count++;
+  }
+  if (count === 0) return { buckets: [], minDur: 0, maxDur: 0, count: 0 };
+
+  const padTop = 2;
+  const usableH = canvasH - padTop - 2 - BASE_BAR_H;
+  const logRange = maxLog - minLog || 1;
+  const nsToX = (ns: number): number => ((ns - viewStart) / (viewEnd - viewStart)) * drawW;
+  const grid = new Map<string, {
+    rows: number[];
+    representativeRow: number;
+    representativeDur: number;
+    y: number;
+  }>();
+
+  for (let r = lo; r < hi; r++) {
+    if (visible[r] === 0) continue;
+    const parent = cs.parentRow[r]!;
+    if (parent >= 0 && visible[parent] !== 0) continue;
+    const start = cs.start[r]!;
+    const end = cs.end[r]!;
+    const dur = end - start;
+    const y = padTop + (1 - (Math.log(Math.max(dur, 1)) - minLog) / logRange) * usableH;
+    const xMid = nsToX((start + end) / 2);
+    const key = `${Math.floor(xMid / CLUSTER_X_PX)},${Math.floor(y / (BASE_BAR_H + 1))}`;
+    const cell = grid.get(key);
+    if (cell === undefined) {
+      grid.set(key, { rows: [r], representativeRow: r, representativeDur: dur, y });
+    } else {
+      cell.rows.push(r);
+      if (dur > cell.representativeDur) {
+        cell.representativeRow = r;
+        cell.representativeDur = dur;
+      }
+    }
+  }
+
+  const buckets: SpanDrawBucket[] = [];
+  for (const cell of grid.values()) {
+    const representative = cs.at(cell.representativeRow);
+    buckets.push({
+      spans: [],
+      rows: cell.rows,
+      representative,
+      x1: Math.max(0, nsToX(representative.start)),
+      x2: Math.max(Math.min(drawW, nsToX(representative.end)), Math.max(0, nsToX(representative.start)) + 4),
+      y: cell.y,
+      h: bucketHeight(cell.rows.length, false, false, canvasH),
+    });
+  }
+  return { buckets, minDur: Math.exp(minLog), maxDur: Math.exp(maxLog), count };
+}
+
 /** Rich focus readout: `name: dur (P% of N) · P50=.. P99=..`. */
 export function focusInfoLine(
   span: TracingSpan,
@@ -372,6 +455,31 @@ export function buildSpanRenderModel(opts: SpanRenderModelOpts): SpanRenderModel
   const { data, viewStart, viewEnd, drawW, canvasH, focusedSpanId, filter } = opts;
   if (drawW <= 0 || viewEnd <= viewStart) {
     return { buckets: [], info: "", minDur: 0, maxDur: 0, renderCount: 0, emptyReason: "no-visible" };
+  }
+
+  if (
+    data.columnarSpans !== undefined &&
+    focusedSpanId === null &&
+    !isFilterActive(filter)
+  ) {
+    const layout = layoutColumnarRoots(
+      data.columnarSpans,
+      viewStart,
+      viewEnd,
+      drawW,
+      canvasH,
+    );
+    if (layout.count === 0) {
+      return { buckets: [], info: "", minDur: 0, maxDur: 0, renderCount: 0, emptyReason: "no-visible" };
+    }
+    return {
+      buckets: layout.buckets,
+      info: `${layout.count} spans · ${layout.buckets.length} clusters`,
+      minDur: layout.minDur,
+      maxDur: layout.maxDur,
+      renderCount: layout.count,
+      emptyReason: null,
+    };
   }
 
   const visible = filterVisibleSpans(data, viewStart, viewEnd, filter);

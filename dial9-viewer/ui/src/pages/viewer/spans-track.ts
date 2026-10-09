@@ -527,7 +527,8 @@ export function createSpansTrack(store: ViewerStore): SpansTrackController {
   }
 
   function tooltipContent(bucket: SpanDrawBucket, data: SpanTrackData): TemplateResult {
-    if (bucket.spans.length === 1) {
+    const count = bucket.rows?.length ?? bucket.spans.length;
+    if (count === 1) {
       const rep = bucket.representative;
       const dur = rep.end - rep.start;
       const idle = dur - rep.activeNs;
@@ -565,16 +566,17 @@ export function createSpansTrack(store: ViewerStore): SpansTrackController {
       `;
     }
     // Cluster tooltip: size + top names + min/max duration.
-    const names = topNames(bucket.spans);
+    const members = bucket.rows?.map((row) => data.columnarSpans!.at(row)) ?? bucket.spans;
+    const names = topNames(members);
     let minDur = Infinity;
     let maxDur = 0;
-    for (const sp of bucket.spans) {
+    for (const sp of members) {
       const d = sp.end - sp.start;
       if (d < minDur) minDur = d;
       if (d > maxDur) maxDur = d;
     }
     return html`
-      <div><span class="tt-k">Cluster:</span> ${bucket.spans.length} spans</div>
+      <div><span class="tt-k">Cluster:</span> ${count} spans</div>
       <div><span class="tt-k">Names:</span> ${names}</div>
       <div>
         <span class="tt-k">Duration:</span> ${formatHumanDuration(minDur)} –

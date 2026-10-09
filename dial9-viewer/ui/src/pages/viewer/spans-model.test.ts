@@ -359,6 +359,16 @@ describe("buildSpanRenderModel", () => {
     expect(m.emptyReason).toBeNull();
   });
 
+  it("keeps columnar root rendering compact", () => {
+    const col = columnarTrackData([parent, child]);
+    const m = buildSpanRenderModel({ ...base, data: col, focusedSpanId: null });
+    expect(m.renderCount).toBe(1);
+    expect(m.buckets).toHaveLength(1);
+    expect(m.buckets[0]!.spans).toEqual([]);
+    expect(m.buckets[0]!.rows).toEqual([0]);
+    expect(m.buckets[0]!.representative.spanId).toBe("p");
+  });
+
   it("focused view includes descendants and pins the focus at the top", () => {
     const m = buildSpanRenderModel({ ...base, focusedSpanId: "p" });
     expect(m.renderCount).toBe(2); // parent + child
