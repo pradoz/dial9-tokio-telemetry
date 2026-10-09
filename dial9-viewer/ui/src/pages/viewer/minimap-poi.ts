@@ -25,9 +25,9 @@ import {
   DEFAULT_SPAWN_DELAY_THRESHOLD_US,
   EVENT_TYPES,
   POI_DEFAULT_WORST_N,
-  filterPointsOfInterest,
 } from "../../lib/trace/index.js";
-import { lifecycleWorkerIds, sharedDetectorInputs } from "../../lib/trace/derived.js";
+import { lifecycleWorkerIds } from "../../lib/trace/derived.js";
+import { poiSourceFor, poisForFilter } from "./poi.js";
 import type {
   ParsedTrace,
   PointOfInterest,
@@ -60,11 +60,11 @@ export function deriveMinimapPois(trace: ParsedTrace): MinimapPoi[] {
   const workerIds = lifecycleWorkerIds(trace);
   if (workerIds.length === 0) return [];
 
-  // Shared with the issues rail. The minimap's detectors (long-poll, sched,
-  // wake-delay, uninstrumented, off-cpu-active) read the spans READ-ONLY, so
-  // one shared reconstruction (attachCpuSamples already applied) yields
-  // identical ticks.
-  const { lanes, schedDelays, hasWorkerCpuTime } = sharedDetectorInputs(trace);
+  // Shared with the issues rail: both surfaces request the same worst-N
+  // detector outputs, so the per-trace cache avoids scanning every poll twice
+  // during the initial render.
+  const source = poiSourceFor(trace);
+  const { hasWorkerCpuTime } = source;
 
   // Applicable detectors: long-poll always; the sched-derived ones only when
   // the trace carries sched-wait data; uninstrumented only when the trace
@@ -89,18 +89,12 @@ export function deriveMinimapPois(trace: ParsedTrace): MinimapPoi[] {
   const seen = new Set<string>();
   const out: MinimapPoi[] = [];
   for (const type of types) {
-    const opts = {
-      hasSchedWait: trace.hasSchedWait,
-      sortByWorst: true,
-      taskInstrumented: trace.taskInstrumented,
-      taskSpawnTimes: trace.taskSpawnTimes,
-      spawnDelayThresholdUs: DEFAULT_SPAWN_DELAY_THRESHOLD_US,
-      hasWorkerCpuTime,
-      limit: MINIMAP_POI_LIMIT,
-    };
-    const pois: PointOfInterest[] = lanes.columnar
-      ? lanes.store.pointsOfInterest(type, workerIds, schedDelays, opts)
-      : filterPointsOfInterest(type, lanes.workerSpans, workerIds, schedDelays, opts);
+    const pois: PointOfInterest[] = poisForFilter(
+      source,
+      type,
+      DEFAULT_SPAWN_DELAY_THRESHOLD_US,
+      MINIMAP_POI_LIMIT,
+    );
     for (const p of pois) {
       const dedupeKey = `${p.time}:${p.worker}:${p.type}`;
       if (seen.has(dedupeKey)) continue;
