@@ -115,6 +115,35 @@ describe("TraceDecoder schema annotations", () => {
     );
   });
 
+  it("keeps timestamp strings by default and emits safe numbers only when requested", () => {
+    const event = [
+      0x54, 0x52, 0x43, 0x00, 1,
+      ...schemaFrame(),
+      0x02, ...u16(TYPE_ID), 1, 0, 0, 7,
+    ];
+    const decodeTimestamp = (options?: { numericTimestamps?: boolean }) => {
+      const decoder = new TraceDecoder(Uint8Array.from(event), options);
+      expect(decoder.decodeHeader()).toBe(true);
+      return decoder.decodeAll().find((frame) => frame.type === "event")?.timestamp_ns;
+    };
+    expect(decodeTimestamp()).toBe("1");
+    expect(decodeTimestamp({ numericTimestamps: true })).toBe(1);
+
+    const overflow = 2n ** 53n;
+    const lo = Number(overflow & 0xffff_ffffn);
+    const hi = Number(overflow >> 32n);
+    const bytes = Uint8Array.from([
+      0x54, 0x52, 0x43, 0x00, 1,
+      ...schemaFrame(),
+      0x05, ...u32(lo), ...u32(hi),
+      0x02, ...u16(TYPE_ID), 1, 0, 0, 7,
+    ]);
+    const decoder = new TraceDecoder(bytes, { numericTimestamps: true });
+    expect(decoder.decodeHeader()).toBe(true);
+    expect(decoder.decodeAll().find((frame) => frame.type === "event")?.timestamp_ns)
+      .toBe((overflow + 1n).toString());
+  });
+
   it("accumulates unit and kind from separate annotation frames", () => {
     const bytes = Uint8Array.from([
       0x54, 0x52, 0x43, 0x00, 1,

@@ -166,7 +166,7 @@ function decodeFieldValue(view, offset, fieldType) {
 }
 
 class TraceDecoder {
-  constructor(buffer) {
+  constructor(buffer, options) {
     const ab = buffer instanceof ArrayBuffer ? buffer : buffer.buffer;
     const off = buffer.byteOffset || 0;
     const len = buffer.byteLength;
@@ -177,6 +177,9 @@ class TraceDecoder {
     this.stackPool = new Map();
     this.version = 0;
     this._timestampBaseNs = 0n;
+    // Viewer-internal fast path: emit safe timestamps as Numbers and retain the
+    // default decimal-string contract outside that opt-in.
+    this._numericTimestamps = options?.numericTimestamps === true;
     // Streaming mode. When false (default, whole-buffer decode), a frame that
     // runs off the end of the buffer is a truncated tail: `nextFrame()` stops
     // gracefully at EOF. When true, the same condition means "the buffer holds
@@ -353,8 +356,11 @@ class TraceDecoder {
       const b2 = this._view.getUint8(this._pos + 2);
       const deltaNs = b0 | (b1 << 8) | (b2 << 16);
       this._pos += 3;
-      timestampNs = (this._timestampBaseNs + BigInt(deltaNs)).toString();
-      this._timestampBaseNs = this._timestampBaseNs + BigInt(deltaNs);
+      const absoluteNs = this._timestampBaseNs + BigInt(deltaNs);
+      timestampNs = this._numericTimestamps && absoluteNs <= 9007199254740991n
+        ? Number(absoluteNs)
+        : absoluteNs.toString();
+      this._timestampBaseNs = absoluteNs;
     }
 
     const values = {};

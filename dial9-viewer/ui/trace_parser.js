@@ -1933,6 +1933,7 @@
         const TD = getTraceDecoder();
         const dec = new TD(
             buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer,
+            { numericTimestamps: true },
         );
         if (!dec.decodeHeader()) throw new Error("Invalid trace header");
         const totalBytes = dec.byteLength;
@@ -2069,7 +2070,7 @@
             if (!headerDecoded) {
                 // Need at least the 5-byte header before any frames. Wait for more.
                 if (acc.length < 5) return;
-                dec = new TD(acc);
+                dec = new TD(acc, { numericTimestamps: true });
                 dec.enableStreaming();
                 if (!dec.decodeHeader())
                     throw new Error("Invalid trace header");

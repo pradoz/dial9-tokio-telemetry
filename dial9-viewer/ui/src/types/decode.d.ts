@@ -138,7 +138,10 @@ declare module "*/decode.js" {
    * streaming mode (see `enableStreaming`).
    */
   export class TraceDecoder {
-    constructor(buffer: ArrayBuffer | Uint8Array);
+    constructor(
+      buffer: ArrayBuffer | Uint8Array,
+      options?: { numericTimestamps?: boolean }
+    );
 
     /** Accumulated event schemas, keyed by wire type id. */
     schemas: Map<number, EventSchema>;
