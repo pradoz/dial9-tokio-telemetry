@@ -15,6 +15,7 @@
 // against the same floor. Task spawns render as an independently scaled,
 // viewport-adaptive histogram behind those series.
 
+import type { QueueSampleIndex } from "../../lib/trace/queue-samples.js";
 import type { ParsedTrace, TimeRange } from "../../types/trace.js";
 import type { StoreState } from "../../types/state.js";
 import {
@@ -69,10 +70,9 @@ export interface QueueData {
   workerIds: readonly number[];
   /** Global injection-queue series, sorted by t. */
   queueSamples: readonly { t: number; global: number }[];
-  /**
-   * All per-worker local-queue samples merged into one t-sorted timeline, so
-   * the render steps it once instead of re-merging per frame (max-local line).
-   */
+  /** Columnar per-worker samples used by real traces without a merged object array. */
+  localQueueSamples: QueueSampleIndex | null;
+  /** Legacy/test merged local-queue timeline. */
   mergedLocalSamples: readonly MergedLocalSample[];
   /** Active-task-count timeline, sorted by t. */
   activeTaskSamples: readonly { t: number; count: number }[];
@@ -100,6 +100,7 @@ export interface QueueData {
 export const EMPTY_QUEUE_DATA: QueueData = {
   workerIds: [],
   queueSamples: [],
+  localQueueSamples: null,
   mergedLocalSamples: [],
   activeTaskSamples: [],
   activeTaskMode: "none",
@@ -153,24 +154,11 @@ export function computeQueueData(trace: ParsedTrace | null): QueueData {
     ? runtimeMetrics.summedGlobalQueue
     : spanResult.queueSamples;
 
-  // Merge every worker's local-queue series into one t-sorted timeline, built
-  // ONCE here so the per-frame render never re-merges. Skipped when the trace
-  // has no local-queue measurements (the per-event values are sentinel zeros).
-  const merged: MergedLocalSample[] = [];
-  if (trace.hasLocalQueueDepth) {
-    for (const w of workerIds) {
-      const samples = spanResult.queueSampleIndex.forWorker(w);
-      for (let i = 0; i < samples.length; i++) {
-        merged.push({ t: samples.tAt(i), w, local: samples.localAt(i) });
-      }
-    }
-    merged.sort((a, b) => a.t - b.t);
-  }
-
   return {
     workerIds,
     queueSamples,
-    mergedLocalSamples: merged,
+    localQueueSamples: spanResult.queueSampleIndex,
+    mergedLocalSamples: [],
     activeTaskSamples,
     activeTaskMode,
     taskSpawnTimes,
@@ -412,25 +400,52 @@ export function buildQueueRenderModel(inputs: QueueRenderInputs): QueueRenderMod
   // values are sentinel zeros, not measurements, and must not mark buckets as
   // having data. bucketLocal stays all-zero (ensureScratch).
   if (data.hasLocalQueueDepth) {
-    const merged = data.mergedLocalSamples;
     runningMax.reset(data.workerIds);
-    // Seed each worker from the sample just before viewStart.
-    const mergeStart = Math.max(0, lowerBoundT(merged, viewStart) - 1);
-    for (let i = mergeStart; i < merged.length; i++) {
-      const s = merged[i]!;
-      if (s.t >= viewStart) break;
-      runningMax.set(s.w, s.local);
-    }
-    let sampleIdx = Math.max(mergeStart, lowerBoundT(merged, viewStart));
-    for (let bi = 0; bi < numBuckets; bi++) {
-      const bucketEnd = viewStart + ((bi + 1) / numBuckets) * viewDur;
-      while (sampleIdx < merged.length && merged[sampleIdx]!.t < bucketEnd) {
-        const s = merged[sampleIdx++]!;
-        runningMax.set(s.w, s.local);
-        bucketHasData[bi] = 1;
-        hasData = true;
+    if (data.localQueueSamples !== null) {
+      const slices = data.workerIds.map((worker) => ({
+        worker,
+        samples: data.localQueueSamples!.forWorker(worker),
+        index: 0,
+      }));
+      for (const state of slices) {
+        state.index = state.samples.firstAtOrAfter(viewStart);
+        const previous = state.index - 1;
+        if (previous >= 0) runningMax.set(state.worker, state.samples.localAt(previous));
       }
-      bucketLocal[bi] = runningMax.value();
+      for (let bi = 0; bi < numBuckets; bi++) {
+        const bucketEnd = viewStart + ((bi + 1) / numBuckets) * viewDur;
+        for (const state of slices) {
+          while (
+            state.index < state.samples.length &&
+            state.samples.tAt(state.index) < bucketEnd
+          ) {
+            runningMax.set(state.worker, state.samples.localAt(state.index++));
+            bucketHasData[bi] = 1;
+            hasData = true;
+          }
+        }
+        bucketLocal[bi] = runningMax.value();
+      }
+    } else {
+      const merged = data.mergedLocalSamples;
+      // Seed each worker from the sample just before viewStart.
+      const mergeStart = Math.max(0, lowerBoundT(merged, viewStart) - 1);
+      for (let i = mergeStart; i < merged.length; i++) {
+        const s = merged[i]!;
+        if (s.t >= viewStart) break;
+        runningMax.set(s.w, s.local);
+      }
+      let sampleIdx = Math.max(mergeStart, lowerBoundT(merged, viewStart));
+      for (let bi = 0; bi < numBuckets; bi++) {
+        const bucketEnd = viewStart + ((bi + 1) / numBuckets) * viewDur;
+        while (sampleIdx < merged.length && merged[sampleIdx]!.t < bucketEnd) {
+          const s = merged[sampleIdx++]!;
+          runningMax.set(s.w, s.local);
+          bucketHasData[bi] = 1;
+          hasData = true;
+        }
+        bucketLocal[bi] = runningMax.value();
+      }
     }
   }
 
